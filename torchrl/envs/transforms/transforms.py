@@ -48,16 +48,16 @@ from torch.utils._pytree import tree_map
 from torchrl._utils import _append_last, _ends_with, _make_ordinal_device, _replace_last
 
 from torchrl.data.tensor_specs import (
-    BinaryDiscreteTensorSpec,
-    BoundedTensorSpec,
-    CompositeSpec,
+    Binary,
+    Bounded,
+    Categorical,
+    Composite,
     ContinuousBox,
-    DiscreteTensorSpec,
-    MultiDiscreteTensorSpec,
-    MultiOneHotDiscreteTensorSpec,
-    OneHotDiscreteTensorSpec,
+    MultiCategorical,
+    MultiOneHot,
+    OneHot,
     TensorSpec,
-    UnboundedContinuousTensorSpec,
+    Unbounded,
 )
 from torchrl.envs.common import _do_nothing, _EnvPostInit, EnvBase, make_tensordict
 from torchrl.envs.transforms import functional as F
@@ -80,14 +80,14 @@ FORWARD_NOT_IMPLEMENTED = "class {} cannot be executed without a parent environm
 def _apply_to_composite(function):
     @wraps(function)
     def new_fun(self, observation_spec):
-        if isinstance(observation_spec, CompositeSpec):
+        if isinstance(observation_spec, Composite):
             _specs = observation_spec._specs
             in_keys = self.in_keys
             out_keys = self.out_keys
             for in_key, out_key in zip(in_keys, out_keys):
                 if in_key in observation_spec.keys(True, True):
                     _specs[out_key] = function(self, observation_spec[in_key].clone())
-            return CompositeSpec(
+            return Composite(
                 _specs, shape=observation_spec.shape, device=observation_spec.device
             )
         else:
@@ -109,7 +109,7 @@ def _apply_to_composite_inv(function):
         action_spec = input_spec["full_action_spec"].clone()
         state_spec = input_spec["full_state_spec"]
         if state_spec is None:
-            state_spec = CompositeSpec(shape=input_spec.shape, device=input_spec.device)
+            state_spec = Composite(shape=input_spec.shape, device=input_spec.device)
         else:
             state_spec = state_spec.clone()
         in_keys_inv = self.in_keys_inv
@@ -122,7 +122,7 @@ def _apply_to_composite_inv(function):
                 action_spec[out_key] = function(self, action_spec[in_key].clone())
             elif in_key in state_spec.keys(True, True):
                 state_spec[out_key] = function(self, state_spec[in_key].clone())
-        return CompositeSpec(
+        return Composite(
             full_state_spec=state_spec,
             full_action_spec=action_spec,
             shape=input_spec.shape,
@@ -360,7 +360,7 @@ class Transform(nn.Module):
         """Transforms the batch-size of the parent env."""
         return batch_size
 
-    def transform_output_spec(self, output_spec: CompositeSpec) -> CompositeSpec:
+    def transform_output_spec(self, output_spec: Composite) -> Composite:
         """Transforms the output spec such that the resulting spec matches transform mapping.
 
         This method should generally be left untouched. Changes should be implemented using
@@ -599,7 +599,7 @@ class TransformedEnv(EnvBase, metaclass=_TEnvPostInit):
             device = env.device
         super().__init__(device=None, allow_done_after_reset=None, **kwargs)
 
-        # Type matching must be exact here, because subtyping could introduce differences in behaviour that must
+        # Type matching must be exact here, because subtyping could introduce differences in behavior that must
         # be contained within the subclass.
         if type(env) is TransformedEnv and type(self) is TransformedEnv:
             self._set_env(env.base_env, device)
@@ -831,7 +831,7 @@ but got an object of type {type(transform)}."""
         return tensordict_reset
 
     def _complete_done(
-        cls, done_spec: CompositeSpec, data: TensorDictBase
+        cls, done_spec: Composite, data: TensorDictBase
     ) -> TensorDictBase:
         # This step has already been completed. We assume the transform module do their job correctly.
         return data
@@ -1465,7 +1465,7 @@ class ClipTransform(Transform):
 
     @_apply_to_composite
     def transform_observation_spec(self, observation_spec: TensorSpec) -> TensorSpec:
-        return BoundedTensorSpec(
+        return Bounded(
             shape=observation_spec.shape,
             device=observation_spec.device,
             dtype=observation_spec.dtype,
@@ -1477,7 +1477,7 @@ class ClipTransform(Transform):
         for key in self.in_keys:
             if key in self.parent.reward_keys:
                 spec = self.parent.output_spec["full_reward_spec"][key]
-                self.parent.output_spec["full_reward_spec"][key] = BoundedTensorSpec(
+                self.parent.output_spec["full_reward_spec"][key] = Bounded(
                     shape=spec.shape,
                     device=spec.device,
                     dtype=spec.dtype,
@@ -1507,7 +1507,7 @@ class TargetReturn(Transform):
 
     In goal-conditioned RL, the :class:`~.TargetReturn` is defined as the
     expected cumulative reward obtained from the current state to the goal state
-    or the end of the episode. It is used as input for the policy to guide its behaviour.
+    or the end of the episode. It is used as input for the policy to guide its behavior.
     For a trained policy typically the maximum return in the environment is
     chosen as the target return.
     However, as it is used as input to the policy module, it should be scaled
@@ -1685,7 +1685,7 @@ class TargetReturn(Transform):
                 target = self.parent.full_done_spec[in_key]
             else:
                 raise RuntimeError(f"in_key {in_key} not found in output_spec.")
-            target_return_spec = UnboundedContinuousTensorSpec(
+            target_return_spec = Unbounded(
                 shape=target.shape,
                 dtype=target.dtype,
                 device=target.device,
@@ -1744,8 +1744,8 @@ class RewardClipping(Transform):
 
     @_apply_to_composite
     def transform_reward_spec(self, reward_spec: TensorSpec) -> TensorSpec:
-        if isinstance(reward_spec, UnboundedContinuousTensorSpec):
-            return BoundedTensorSpec(
+        if isinstance(reward_spec, Unbounded):
+            return Bounded(
                 self.clamp_min,
                 self.clamp_max,
                 shape=reward_spec.shape,
@@ -1798,7 +1798,7 @@ class BinarizeReward(Transform):
 
     @_apply_to_composite
     def transform_reward_spec(self, reward_spec: TensorSpec) -> TensorSpec:
-        return BinaryDiscreteTensorSpec(
+        return Binary(
             n=1,
             device=reward_spec.device,
             shape=reward_spec.shape,
@@ -2505,7 +2505,7 @@ class ObservationNorm(ObservationTransform):
         loc (number or tensor): location of the affine transform
         scale (number or tensor): scale of the affine transform
         in_keys (sequence of NestedKey, optional): entries to be normalized. Defaults to ["observation", "pixels"].
-            All entries will be normalized with the same values: if a different behaviour is desired
+            All entries will be normalized with the same values: if a different behavior is desired
             (e.g. a different normalization for pixels and states) different :obj:`ObservationNorm`
             objects should be used.
         out_keys (sequence of NestedKey, optional): output entries. Defaults to the value of `in_keys`.
@@ -2569,7 +2569,7 @@ class ObservationNorm(ObservationTransform):
     ):
         if in_keys is None:
             raise RuntimeError(
-                "Not passing in_keys to ObservationNorm is a deprecated behaviour."
+                "Not passing in_keys to ObservationNorm is a deprecated behavior."
             )
 
         if out_keys is None:
@@ -3321,7 +3321,7 @@ class RewardScaling(Transform):
 
     @_apply_to_composite
     def transform_reward_spec(self, reward_spec: TensorSpec) -> TensorSpec:
-        if isinstance(reward_spec, UnboundedContinuousTensorSpec):
+        if isinstance(reward_spec, Unbounded):
             return reward_spec
         else:
             raise NotImplementedError(
@@ -3361,7 +3361,7 @@ class DTypeCastTransform(Transform):
     """Casts one dtype to another for selected keys.
 
     Depending on whether the ``in_keys`` or ``in_keys_inv`` are provided
-    during construction, the class behaviour will change:
+    during construction, the class behavior will change:
 
       * If the keys are provided, those entries and those entries only will be
         transformed from ``dtype_in`` to ``dtype_out`` entries;
@@ -3417,17 +3417,17 @@ class DTypeCastTransform(Transform):
         >>> print(td.get("not_transformed").dtype)
         torch.float32
 
-    The same behaviour is the rule when environments are constructedw without
+    The same behavior is the rule when environments are constructedw without
     specifying the transform keys:
 
     Examples:
         >>> class MyEnv(EnvBase):
         ...     def __init__(self):
         ...         super().__init__()
-        ...         self.observation_spec = CompositeSpec(obs=UnboundedContinuousTensorSpec((), dtype=torch.float64))
-        ...         self.action_spec = UnboundedContinuousTensorSpec((), dtype=torch.float64)
-        ...         self.reward_spec = UnboundedContinuousTensorSpec((1,), dtype=torch.float64)
-        ...         self.done_spec = UnboundedContinuousTensorSpec((1,), dtype=torch.bool)
+        ...         self.observation_spec = Composite(obs=Unbounded((), dtype=torch.float64))
+        ...         self.action_spec = Unbounded((), dtype=torch.float64)
+        ...         self.reward_spec = Unbounded((1,), dtype=torch.float64)
+        ...         self.done_spec = Unbounded((1,), dtype=torch.bool)
         ...     def _reset(self, data=None):
         ...         return TensorDict({"done": torch.zeros((1,), dtype=torch.bool), **self.observation_spec.rand()}, [])
         ...     def _step(self, data):
@@ -3640,7 +3640,7 @@ class DTypeCastTransform(Transform):
         return state.to(self.dtype_in)
 
     def _transform_spec(self, spec: TensorSpec) -> None:
-        if isinstance(spec, CompositeSpec):
+        if isinstance(spec, Composite):
             for key in spec:
                 self._transform_spec(spec[key])
         else:
@@ -3685,7 +3685,7 @@ class DTypeCastTransform(Transform):
                 raise RuntimeError
         return input_spec
 
-    def transform_output_spec(self, output_spec: CompositeSpec) -> CompositeSpec:
+    def transform_output_spec(self, output_spec: Composite) -> Composite:
         if self.in_keys is None:
             raise NotImplementedError(
                 f"Calling transform_reward_spec without a parent environment isn't supported yet for {type(self)}."
@@ -3733,7 +3733,7 @@ class DoubleToFloat(DTypeCastTransform):
     """Casts one dtype to another for selected keys.
 
     Depending on whether the ``in_keys`` or ``in_keys_inv`` are provided
-    during construction, the class behaviour will change:
+    during construction, the class behavior will change:
 
       * If the keys are provided, those entries and those entries only will be
         transformed from ``float64`` to ``float32`` entries;
@@ -3787,17 +3787,17 @@ class DoubleToFloat(DTypeCastTransform):
         >>> print(td.get("not_transformed").dtype)
         torch.float32
 
-    The same behaviour is the rule when environments are constructedw without
+    The same behavior is the rule when environments are constructedw without
     specifying the transform keys:
 
     Examples:
         >>> class MyEnv(EnvBase):
         ...     def __init__(self):
         ...         super().__init__()
-        ...         self.observation_spec = CompositeSpec(obs=UnboundedContinuousTensorSpec((), dtype=torch.float64))
-        ...         self.action_spec = UnboundedContinuousTensorSpec((), dtype=torch.float64)
-        ...         self.reward_spec = UnboundedContinuousTensorSpec((1,), dtype=torch.float64)
-        ...         self.done_spec = UnboundedContinuousTensorSpec((1,), dtype=torch.bool)
+        ...         self.observation_spec = Composite(obs=Unbounded((), dtype=torch.float64))
+        ...         self.action_spec = Unbounded((), dtype=torch.float64)
+        ...         self.reward_spec = Unbounded((1,), dtype=torch.float64)
+        ...         self.done_spec = Unbounded((1,), dtype=torch.bool)
         ...     def _reset(self, data=None):
         ...         return TensorDict({"done": torch.zeros((1,), dtype=torch.bool), **self.observation_spec.rand()}, [])
         ...     def _step(self, data):
@@ -4010,13 +4010,13 @@ class DeviceCastTransform(Transform):
             return self._sync_orig_device
         return sync_func
 
-    def transform_input_spec(self, input_spec: CompositeSpec) -> CompositeSpec:
+    def transform_input_spec(self, input_spec: Composite) -> Composite:
         if self._map_env_device:
             return input_spec.to(self.device)
         else:
             return super().transform_input_spec(input_spec)
 
-    def transform_action_spec(self, full_action_spec: CompositeSpec) -> CompositeSpec:
+    def transform_action_spec(self, full_action_spec: Composite) -> Composite:
         full_action_spec = full_action_spec.clear_device_()
         for in_key, out_key in zip(self.in_keys_inv, self.out_keys_inv):
             if in_key not in full_action_spec.keys(True, True):
@@ -4024,7 +4024,7 @@ class DeviceCastTransform(Transform):
             full_action_spec[out_key] = full_action_spec[in_key].to(self.device)
         return full_action_spec
 
-    def transform_state_spec(self, full_state_spec: CompositeSpec) -> CompositeSpec:
+    def transform_state_spec(self, full_state_spec: Composite) -> Composite:
         full_state_spec = full_state_spec.clear_device_()
         for in_key, out_key in zip(self.in_keys_inv, self.out_keys_inv):
             if in_key not in full_state_spec.keys(True, True):
@@ -4032,15 +4032,13 @@ class DeviceCastTransform(Transform):
             full_state_spec[out_key] = full_state_spec[in_key].to(self.device)
         return full_state_spec
 
-    def transform_output_spec(self, output_spec: CompositeSpec) -> CompositeSpec:
+    def transform_output_spec(self, output_spec: Composite) -> Composite:
         if self._map_env_device:
             return output_spec.to(self.device)
         else:
             return super().transform_output_spec(output_spec)
 
-    def transform_observation_spec(
-        self, observation_spec: CompositeSpec
-    ) -> CompositeSpec:
+    def transform_observation_spec(self, observation_spec: Composite) -> Composite:
         observation_spec = observation_spec.clear_device_()
         for in_key, out_key in zip(self.in_keys, self.out_keys):
             if in_key not in observation_spec.keys(True, True):
@@ -4048,7 +4046,7 @@ class DeviceCastTransform(Transform):
             observation_spec[out_key] = observation_spec[in_key].to(self.device)
         return observation_spec
 
-    def transform_done_spec(self, full_done_spec: CompositeSpec) -> CompositeSpec:
+    def transform_done_spec(self, full_done_spec: Composite) -> Composite:
         full_done_spec = full_done_spec.clear_device_()
         for in_key, out_key in zip(self.in_keys, self.out_keys):
             if in_key not in full_done_spec.keys(True, True):
@@ -4056,7 +4054,7 @@ class DeviceCastTransform(Transform):
             full_done_spec[out_key] = full_done_spec[in_key].to(self.device)
         return full_done_spec
 
-    def transform_reward_spec(self, full_reward_spec: CompositeSpec) -> CompositeSpec:
+    def transform_reward_spec(self, full_reward_spec: Composite) -> Composite:
         full_reward_spec = full_reward_spec.clear_device_()
         for in_key, out_key in zip(self.in_keys, self.out_keys):
             if in_key not in full_reward_spec.keys(True, True):
@@ -4092,7 +4090,7 @@ class CatTensors(Transform):
     Args:
         in_keys (sequence of NestedKey): keys to be concatenated. If `None` (or not provided)
             the keys will be retrieved from the parent environment the first time
-            the transform is used. This behaviour will only work if a parent is set.
+            the transform is used. This behavior will only work if a parent is set.
         out_key (NestedKey): key of the resulting tensor.
         dim (int, optional): dimension along which the concatenation will occur.
             Default is ``-1``.
@@ -4215,13 +4213,13 @@ class CatTensors(Transform):
             self._initialized = True
 
         # check that all keys are in observation_spec
-        if len(self.in_keys) > 1 and not isinstance(observation_spec, CompositeSpec):
+        if len(self.in_keys) > 1 and not isinstance(observation_spec, Composite):
             raise ValueError(
                 "CatTensor cannot infer the output observation spec as there are multiple input keys but "
                 "only one observation_spec."
             )
 
-        if isinstance(observation_spec, CompositeSpec) and len(
+        if isinstance(observation_spec, Composite) and len(
             [key for key in self.in_keys if key not in observation_spec.keys(True)]
         ):
             raise ValueError(
@@ -4229,7 +4227,7 @@ class CatTensors(Transform):
                 "Make sure the environment has an observation_spec attribute that includes all the specs needed for CatTensor."
             )
 
-        if not isinstance(observation_spec, CompositeSpec):
+        if not isinstance(observation_spec, Composite):
             # by def, there must be only one key
             return observation_spec
 
@@ -4249,7 +4247,7 @@ class CatTensors(Transform):
         device = spec0.device
         shape[self.dim] = sum_shape
         shape = torch.Size(shape)
-        observation_spec[out_key] = UnboundedContinuousTensorSpec(
+        observation_spec[out_key] = Unbounded(
             shape=shape,
             dtype=spec0.dtype,
             device=device,
@@ -4357,14 +4355,14 @@ class DiscreteActionProjection(Transform):
         action = nn.functional.one_hot(action, self.num_actions_effective)
         return action
 
-    def transform_input_spec(self, input_spec: CompositeSpec):
+    def transform_input_spec(self, input_spec: Composite):
         input_spec = input_spec.clone()
         for key in input_spec["full_action_spec"].keys(True, True):
             key = ("full_action_spec", key)
             break
         else:
             raise KeyError("key not found in action_spec.")
-        input_spec[key] = OneHotDiscreteTensorSpec(
+        input_spec[key] = OneHot(
             self.max_actions,
             shape=(*input_spec[key].shape[:-1], self.max_actions),
             device=input_spec.device,
@@ -4456,7 +4454,7 @@ class NoopResetEnv(Transform):
             )
         # Merge the two tensordicts
         tensordict = parent._reset_proc_data(tensordict.clone(False), tensordict_reset)
-        # check that there is a single done state -- behaviour is undefined for multiple dones
+        # check that there is a single done state -- behavior is undefined for multiple dones
         done_keys = parent.done_keys
         reward_key = parent.reward_key
         if parent.batch_size.numel() > 1:
@@ -4526,9 +4524,9 @@ class TensorDictPrimer(Transform):
     tensordict with the desired features.
 
     Args:
-        primers (dict or CompositeSpec, optional): a dictionary containing
+        primers (dict or Composite, optional): a dictionary containing
             key-spec pairs which will be used to populate the input tensordict.
-            :class:`~torchrl.data.CompositeSpec` instances are supported too.
+            :class:`~torchrl.data.Composite` instances are supported too.
         random (bool, optional): if ``True``, the values will be drawn randomly from
             the TensorSpec domain (or a unit Gaussian if unbounded). Otherwise a fixed value will be assumed.
             Defaults to `False`.
@@ -4557,7 +4555,7 @@ class TensorDictPrimer(Transform):
         >>> base_env = SerialEnv(2, lambda: GymEnv("Pendulum-v1"))
         >>> env = TransformedEnv(base_env)
         >>> # the env is batch-locked, so the leading dims of the spec must match those of the env
-        >>> env.append_transform(TensorDictPrimer(mykey=UnboundedContinuousTensorSpec([2, 3])))
+        >>> env.append_transform(TensorDictPrimer(mykey=Unbounded([2, 3])))
         >>> td = env.reset()
         >>> print(td)
         TensorDict(
@@ -4598,7 +4596,7 @@ class TensorDictPrimer(Transform):
 
     def __init__(
         self,
-        primers: dict | CompositeSpec = None,
+        primers: dict | Composite = None,
         random: bool | None = None,
         default_value: float
         | Callable
@@ -4615,8 +4613,8 @@ class TensorDictPrimer(Transform):
                     "as kwargs."
                 )
             kwargs = primers
-        if not isinstance(kwargs, CompositeSpec):
-            kwargs = CompositeSpec(kwargs)
+        if not isinstance(kwargs, Composite):
+            kwargs = Composite(kwargs)
         self.primers = kwargs
         if random and default_value:
             raise ValueError(
@@ -4646,7 +4644,7 @@ class TensorDictPrimer(Transform):
         self.reset_key = reset_key
 
         # sanity check
-        for spec in self.primers.values():
+        for spec in self.primers.values(True, True):
             if not isinstance(spec, TensorSpec):
                 raise ValueError(
                     "The values of the primers must be a subtype of the TensorSpec class. "
@@ -4698,22 +4696,21 @@ class TensorDictPrimer(Transform):
     def _expand_shape(self, spec):
         return spec.expand((*self.parent.batch_size, *spec.shape))
 
-    def transform_observation_spec(
-        self, observation_spec: CompositeSpec
-    ) -> CompositeSpec:
-        if not isinstance(observation_spec, CompositeSpec):
+    def transform_observation_spec(self, observation_spec: Composite) -> Composite:
+        if not isinstance(observation_spec, Composite):
             raise ValueError(
-                f"observation_spec was expected to be of type CompositeSpec. Got {type(observation_spec)} instead."
+                f"observation_spec was expected to be of type Composite. Got {type(observation_spec)} instead."
             )
-        for key, spec in self.primers.items():
-            if spec.shape[: len(observation_spec.shape)] != observation_spec.shape:
-                expanded_spec = self._expand_shape(spec)
-                spec = expanded_spec
+
+        if self.primers.shape != observation_spec.shape:
             try:
-                device = observation_spec.device
-            except RuntimeError:
-                device = self.device
-            observation_spec[key] = self.primers[key] = spec.to(device)
+                # We try to set the primer shape to the observation spec shape
+                self.primers.shape = observation_spec.shape
+            except ValueError:
+                # If we fail, we expnad them to that shape
+                self.primers = self._expand_shape(self.primers)
+        device = observation_spec.device
+        observation_spec.update(self.primers.clone().to(device))
         return observation_spec
 
     def transform_input_spec(self, input_spec: TensorSpec) -> TensorSpec:
@@ -4763,8 +4760,8 @@ class TensorDictPrimer(Transform):
     def _step(
         self, tensordict: TensorDictBase, next_tensordict: TensorDictBase
     ) -> TensorDictBase:
-        for key in self.primers.keys():
-            if key not in next_tensordict.keys(True):
+        for key in self.primers.keys(True, True):
+            if key not in next_tensordict.keys(True, True):
                 prev_val = tensordict.get(key)
                 next_tensordict.set(key, prev_val)
         return next_tensordict
@@ -4782,9 +4779,6 @@ class TensorDictPrimer(Transform):
         _reset = _get_reset(self.reset_key, tensordict)
         if _reset.any():
             for key, spec in self.primers.items(True, True):
-                if spec.shape[: len(tensordict.batch_size)] != tensordict.batch_size:
-                    expanded_spec = self._expand_shape(spec)
-                    self.primers[key] = spec = expanded_spec
                 if self.random:
                     shape = (
                         ()
@@ -4868,7 +4862,7 @@ class gSDENoise(TensorDictPrimer):
         )
         random = state_dim is not None and action_dim is not None
         shape = tuple(shape) + tail_dim
-        primers = {"_eps_gSDE": UnboundedContinuousTensorSpec(shape=shape)}
+        primers = {"_eps_gSDE": Unbounded(shape=shape)}
         super().__init__(primers=primers, random=random, **kwargs)
 
 
@@ -5327,8 +5321,8 @@ class VecNorm(Transform):
 
     @_apply_to_composite
     def transform_observation_spec(self, observation_spec: TensorSpec) -> TensorSpec:
-        if isinstance(observation_spec, BoundedTensorSpec):
-            return UnboundedContinuousTensorSpec(
+        if isinstance(observation_spec, Bounded):
+            return Unbounded(
                 shape=observation_spec.shape,
                 dtype=observation_spec.dtype,
                 device=observation_spec.device,
@@ -5542,13 +5536,13 @@ class RewardSum(Transform):
     def transform_input_spec(self, input_spec: TensorSpec) -> TensorSpec:
         state_spec = input_spec["full_state_spec"]
         if state_spec is None:
-            state_spec = CompositeSpec(shape=input_spec.shape, device=input_spec.device)
+            state_spec = Composite(shape=input_spec.shape, device=input_spec.device)
         state_spec.update(self._generate_episode_reward_spec())
         input_spec["full_state_spec"] = state_spec
         return input_spec
 
-    def _generate_episode_reward_spec(self) -> CompositeSpec:
-        episode_reward_spec = CompositeSpec()
+    def _generate_episode_reward_spec(self) -> Composite:
+        episode_reward_spec = Composite()
         reward_spec = self.parent.full_reward_spec
         reward_spec_keys = self.parent.reward_keys
         # Define episode specs for all out_keys
@@ -5561,7 +5555,7 @@ class RewardSum(Transform):
                 temp_rew_spec = reward_spec
                 for sub_key in out_key[:-1]:
                     if (
-                        not isinstance(temp_rew_spec, CompositeSpec)
+                        not isinstance(temp_rew_spec, Composite)
                         or sub_key not in temp_rew_spec.keys()
                     ):
                         break
@@ -5582,8 +5576,8 @@ class RewardSum(Transform):
         """Transforms the observation spec, adding the new keys generated by RewardSum."""
         if self.reward_spec:
             return observation_spec
-        if not isinstance(observation_spec, CompositeSpec):
-            observation_spec = CompositeSpec(
+        if not isinstance(observation_spec, Composite):
+            observation_spec = Composite(
                 observation=observation_spec, shape=self.parent.batch_size
             )
         observation_spec.update(self._generate_episode_reward_spec())
@@ -5603,7 +5597,7 @@ class RewardSum(Transform):
             )
         time_dim = time_dim[0] - 1
         for in_key, out_key in zip(self.in_keys, self.out_keys):
-            reward = tensordict.get(in_key)
+            reward = tensordict[in_key]
             cumsum = reward.cumsum(time_dim)
             tensordict.set(out_key, cumsum)
         return tensordict
@@ -5846,12 +5840,10 @@ class StepCounter(Transform):
                 next_tensordict.set(truncated_key, truncated)
         return next_tensordict
 
-    def transform_observation_spec(
-        self, observation_spec: CompositeSpec
-    ) -> CompositeSpec:
-        if not isinstance(observation_spec, CompositeSpec):
+    def transform_observation_spec(self, observation_spec: Composite) -> Composite:
+        if not isinstance(observation_spec, Composite):
             raise ValueError(
-                f"observation_spec was expected to be of type CompositeSpec. Got {type(observation_spec)} instead."
+                f"observation_spec was expected to be of type Composite. Got {type(observation_spec)} instead."
             )
         full_done_spec = self.parent.output_spec["full_done_spec"]
         for step_count_key in self.step_count_keys:
@@ -5873,7 +5865,7 @@ class StepCounter(Transform):
                 raise KeyError(
                     f"Could not find root of step_count_key {step_count_key} in done keys {self.done_keys}."
                 )
-            observation_spec[step_count_key] = BoundedTensorSpec(
+            observation_spec[step_count_key] = Bounded(
                 shape=shape,
                 dtype=torch.int64,
                 device=observation_spec.device,
@@ -5882,7 +5874,7 @@ class StepCounter(Transform):
             )
         return super().transform_observation_spec(observation_spec)
 
-    def transform_output_spec(self, output_spec: CompositeSpec) -> CompositeSpec:
+    def transform_output_spec(self, output_spec: Composite) -> Composite:
         if self.max_steps:
             full_done_spec = self.parent.output_spec["full_done_spec"]
             for truncated_key in self.truncated_keys:
@@ -5904,7 +5896,7 @@ class StepCounter(Transform):
                     raise KeyError(
                         f"Could not find root of truncated_key {truncated_key} in done keys {self.done_keys}."
                     )
-                full_done_spec[truncated_key] = DiscreteTensorSpec(
+                full_done_spec[truncated_key] = Categorical(
                     2, dtype=torch.bool, device=output_spec.device, shape=shape
                 )
             if self.update_done:
@@ -5927,19 +5919,19 @@ class StepCounter(Transform):
                         raise KeyError(
                             f"Could not find root of stop_key {done_key} in done keys {self.done_keys}."
                         )
-                    full_done_spec[done_key] = DiscreteTensorSpec(
+                    full_done_spec[done_key] = Categorical(
                         2, dtype=torch.bool, device=output_spec.device, shape=shape
                     )
             output_spec["full_done_spec"] = full_done_spec
         return super().transform_output_spec(output_spec)
 
-    def transform_input_spec(self, input_spec: CompositeSpec) -> CompositeSpec:
-        if not isinstance(input_spec, CompositeSpec):
+    def transform_input_spec(self, input_spec: Composite) -> Composite:
+        if not isinstance(input_spec, Composite):
             raise ValueError(
-                f"input_spec was expected to be of type CompositeSpec. Got {type(input_spec)} instead."
+                f"input_spec was expected to be of type Composite. Got {type(input_spec)} instead."
             )
         if input_spec["full_state_spec"] is None:
-            input_spec["full_state_spec"] = CompositeSpec(
+            input_spec["full_state_spec"] = Composite(
                 shape=input_spec.shape, device=input_spec.device
             )
 
@@ -5964,9 +5956,7 @@ class StepCounter(Transform):
                     f"Could not find root of step_count_key {step_count_key} in done keys {self.done_keys}."
                 )
 
-            input_spec[
-                unravel_key(("full_state_spec", step_count_key))
-            ] = BoundedTensorSpec(
+            input_spec[unravel_key(("full_state_spec", step_count_key))] = Bounded(
                 shape=shape,
                 dtype=torch.int64,
                 device=input_spec.device,
@@ -6053,7 +6043,7 @@ class ExcludeTransform(Transform):
             return tensordict_reset.exclude(*self.excluded_keys)
         return tensordict
 
-    def transform_output_spec(self, output_spec: CompositeSpec) -> CompositeSpec:
+    def transform_output_spec(self, output_spec: Composite) -> Composite:
         if not self.inverse:
             full_done_spec = output_spec["full_done_spec"]
             full_reward_spec = output_spec["full_reward_spec"]
@@ -6173,7 +6163,7 @@ class SelectTransform(Transform):
             *self.selected_keys, *reward_keys, *done_keys, *input_keys, strict=False
         )
 
-    def transform_output_spec(self, output_spec: CompositeSpec) -> CompositeSpec:
+    def transform_output_spec(self, output_spec: Composite) -> Composite:
         full_done_spec = output_spec["full_done_spec"]
         full_reward_spec = output_spec["full_reward_spec"]
         full_observation_spec = output_spec["full_observation_spec"]
@@ -6383,7 +6373,7 @@ class RandomCropTensorDict(Transform):
 
     This transform is primarily designed to be used with replay buffers and modules.
     Currently, it cannot be used as an environment transform.
-    Do not hesitate to request for this behaviour through an issue if this is
+    Do not hesitate to request for this behavior through an issue if this is
     desired.
 
     Args:
@@ -6411,7 +6401,7 @@ class RandomCropTensorDict(Transform):
         if sample_dim > 0:
             warnings.warn(
                 "A positive shape has been passed to the RandomCropTensorDict "
-                "constructor. This may have unexpected behaviours when the "
+                "constructor. This may have unexpected behaviors when the "
                 "passed tensordicts have inconsistent batch dimensions. "
                 "For context, by convention, TorchRL concatenates time steps "
                 "along the last dimension of the tensordict."
@@ -6612,7 +6602,7 @@ class InitTracker(Transform):
                 raise KeyError(
                     f"Could not find root of init_key {init_key} within done_keys {self.parent.done_keys}."
                 )
-            observation_spec[init_key] = DiscreteTensorSpec(
+            observation_spec[init_key] = Categorical(
                 2,
                 dtype=torch.bool,
                 device=self.parent.device,
@@ -6751,7 +6741,7 @@ class RenameTransform(Transform):
                         raise
         return tensordict
 
-    def transform_output_spec(self, output_spec: CompositeSpec) -> CompositeSpec:
+    def transform_output_spec(self, output_spec: Composite) -> Composite:
         for done_key in self.parent.done_keys:
             if done_key in self.in_keys:
                 for i, out_key in enumerate(self.out_keys):  # noqa: B007
@@ -6793,7 +6783,7 @@ class RenameTransform(Transform):
                     del output_spec["full_observation_spec"][observation_key]
         return output_spec
 
-    def transform_input_spec(self, input_spec: CompositeSpec) -> CompositeSpec:
+    def transform_input_spec(self, input_spec: Composite) -> Composite:
         for action_key in self.parent.action_keys:
             if action_key in self.in_keys:
                 for i, out_key in enumerate(self.out_keys):  # noqa: B007
@@ -7005,16 +6995,16 @@ class ActionMask(Transform):
 
     Examples:
         >>> import torch
-        >>> from torchrl.data.tensor_specs import DiscreteTensorSpec, BinaryDiscreteTensorSpec, UnboundedContinuousTensorSpec, CompositeSpec
+        >>> from torchrl.data.tensor_specs import Categorical, Binary, Unbounded, Composite
         >>> from torchrl.envs.transforms import ActionMask, TransformedEnv
         >>> from torchrl.envs.common import EnvBase
         >>> class MaskedEnv(EnvBase):
         ...     def __init__(self, *args, **kwargs):
         ...         super().__init__(*args, **kwargs)
-        ...         self.action_spec = DiscreteTensorSpec(4)
-        ...         self.state_spec = CompositeSpec(action_mask=BinaryDiscreteTensorSpec(4, dtype=torch.bool))
-        ...         self.observation_spec = CompositeSpec(obs=UnboundedContinuousTensorSpec(3))
-        ...         self.reward_spec = UnboundedContinuousTensorSpec(1)
+        ...         self.action_spec = Categorical(4)
+        ...         self.state_spec = Composite(action_mask=Binary(4, dtype=torch.bool))
+        ...         self.observation_spec = Composite(obs=Unbounded(3))
+        ...         self.reward_spec = Unbounded(1)
         ...
         ...     def _reset(self, tensordict=None):
         ...         td = self.observation_spec.rand()
@@ -7050,10 +7040,10 @@ class ActionMask(Transform):
     """
 
     ACCEPTED_SPECS = (
-        OneHotDiscreteTensorSpec,
-        DiscreteTensorSpec,
-        MultiOneHotDiscreteTensorSpec,
-        MultiDiscreteTensorSpec,
+        OneHot,
+        Categorical,
+        MultiOneHot,
+        MultiCategorical,
     )
     SPEC_TYPE_ERROR = "The action spec must be one of {}. Got {} instead."
 
@@ -7479,7 +7469,7 @@ class SignTransform(Transform):
 
     @_apply_to_composite
     def transform_observation_spec(self, observation_spec: TensorSpec) -> TensorSpec:
-        return BoundedTensorSpec(
+        return Bounded(
             shape=observation_spec.shape,
             device=observation_spec.device,
             dtype=observation_spec.dtype,
@@ -7491,7 +7481,7 @@ class SignTransform(Transform):
         for key in self.in_keys:
             if key in self.parent.reward_keys:
                 spec = self.parent.output_spec["full_reward_spec"][key]
-                self.parent.output_spec["full_reward_spec"][key] = BoundedTensorSpec(
+                self.parent.output_spec["full_reward_spec"][key] = Bounded(
                     shape=spec.shape,
                     device=spec.device,
                     dtype=spec.dtype,
@@ -7514,31 +7504,31 @@ class RemoveEmptySpecs(Transform):
     Examples:
         >>> import torch
         >>> from tensordict import TensorDict
-        >>> from torchrl.data import UnboundedContinuousTensorSpec, CompositeSpec, \
-        ...     DiscreteTensorSpec
+        >>> from torchrl.data import Unbounded, Composite, \
+        ...     Categorical
         >>> from torchrl.envs import EnvBase, TransformedEnv, RemoveEmptySpecs
         >>>
         >>>
         >>> class DummyEnv(EnvBase):
         ...     def __init__(self, *args, **kwargs):
         ...         super().__init__(*args, **kwargs)
-        ...         self.observation_spec = CompositeSpec(
-        ...             observation=UnboundedContinuousTensorSpec((*self.batch_size, 3)),
-        ...             other=CompositeSpec(
-        ...                 another_other=CompositeSpec(shape=self.batch_size),
+        ...         self.observation_spec = Composite(
+        ...             observation=UnboundedContinuous((*self.batch_size, 3)),
+        ...             other=Composite(
+        ...                 another_other=Composite(shape=self.batch_size),
         ...                 shape=self.batch_size,
         ...             ),
         ...             shape=self.batch_size,
         ...         )
-        ...         self.action_spec = UnboundedContinuousTensorSpec((*self.batch_size, 3))
-        ...         self.done_spec = DiscreteTensorSpec(
+        ...         self.action_spec = UnboundedContinuous((*self.batch_size, 3))
+        ...         self.done_spec = Categorical(
         ...             2, (*self.batch_size, 1), dtype=torch.bool
         ...         )
         ...         self.full_done_spec["truncated"] = self.full_done_spec[
         ...             "terminated"].clone()
-        ...         self.reward_spec = CompositeSpec(
-        ...             reward=UnboundedContinuousTensorSpec(*self.batch_size, 1),
-        ...             other_reward=CompositeSpec(shape=self.batch_size),
+        ...         self.reward_spec = Composite(
+        ...             reward=UnboundedContinuous(*self.batch_size, 1),
+        ...             other_reward=Composite(shape=self.batch_size),
         ...             shape=self.batch_size
         ...             )
         ...
@@ -7631,7 +7621,7 @@ class RemoveEmptySpecs(Transform):
             return 0
         return len(key)
 
-    def transform_output_spec(self, output_spec: CompositeSpec) -> CompositeSpec:
+    def transform_output_spec(self, output_spec: Composite) -> Composite:
         full_done_spec = output_spec["full_done_spec"]
         full_reward_spec = output_spec["full_reward_spec"]
         full_observation_spec = output_spec["full_observation_spec"]
@@ -7639,19 +7629,19 @@ class RemoveEmptySpecs(Transform):
         for key, spec in sorted(
             full_done_spec.items(True), key=self._sorter, reverse=True
         ):
-            if isinstance(spec, CompositeSpec) and spec.is_empty():
+            if isinstance(spec, Composite) and spec.is_empty():
                 del full_done_spec[key]
 
         for key, spec in sorted(
             full_observation_spec.items(True), key=self._sorter, reverse=True
         ):
-            if isinstance(spec, CompositeSpec) and spec.is_empty():
+            if isinstance(spec, Composite) and spec.is_empty():
                 del full_observation_spec[key]
 
         for key, spec in sorted(
             full_reward_spec.items(True), key=self._sorter, reverse=True
         ):
-            if isinstance(spec, CompositeSpec) and spec.is_empty():
+            if isinstance(spec, Composite) and spec.is_empty():
                 del full_reward_spec[key]
         return output_spec
 
@@ -7664,14 +7654,14 @@ class RemoveEmptySpecs(Transform):
         for key, spec in sorted(
             full_action_spec.items(True), key=self._sorter, reverse=True
         ):
-            if isinstance(spec, CompositeSpec) and spec.is_empty():
+            if isinstance(spec, Composite) and spec.is_empty():
                 self._has_empty_input = True
                 del full_action_spec[key]
 
         for key, spec in sorted(
             full_state_spec.items(True), key=self._sorter, reverse=True
         ):
-            if isinstance(spec, CompositeSpec) and spec.is_empty():
+            if isinstance(spec, Composite) and spec.is_empty():
                 self._has_empty_input = True
                 del full_state_spec[key]
         return input_spec
@@ -7690,7 +7680,7 @@ class RemoveEmptySpecs(Transform):
                 full_action_spec.items(True), key=self._sorter, reverse=True
             ):
                 if (
-                    isinstance(spec, CompositeSpec)
+                    isinstance(spec, Composite)
                     and spec.is_empty()
                     and key not in tensordict.keys(True)
                 ):
@@ -7700,7 +7690,7 @@ class RemoveEmptySpecs(Transform):
                 full_state_spec.items(True), key=self._sorter, reverse=True
             ):
                 if (
-                    isinstance(spec, CompositeSpec)
+                    isinstance(spec, Composite)
                     and spec.is_empty()
                     and key not in tensordict.keys(True)
                 ):
@@ -7868,9 +7858,9 @@ class BatchSizeTransform(Transform):
         ...     batch_locked = False
         ...     def __init__(self):
         ...         super().__init__()
-        ...         self.observation_spec = CompositeSpec(observation=UnboundedContinuousTensorSpec(3))
-        ...         self.reward_spec = UnboundedContinuousTensorSpec(1)
-        ...         self.action_spec = UnboundedContinuousTensorSpec(1)
+        ...         self.observation_spec = Composite(observation=Unbounded(3))
+        ...         self.reward_spec = Unbounded(1)
+        ...         self.action_spec = Unbounded(1)
         ...
         ...     def _reset(self, tensordict: TensorDictBase, **kwargs) -> TensorDictBase:
         ...         tensordict_batch_size = tensordict.batch_size if tensordict is not None else torch.Size([])
@@ -8018,12 +8008,12 @@ class BatchSizeTransform(Transform):
             return self.batch_size
         return self.reshape_fn(torch.zeros(batch_size, device="meta")).shape
 
-    def transform_output_spec(self, output_spec: CompositeSpec) -> CompositeSpec:
+    def transform_output_spec(self, output_spec: Composite) -> Composite:
         if self.batch_size is not None:
             return output_spec.expand(self.batch_size)
         return self.reshape_fn(output_spec)
 
-    def transform_input_spec(self, input_spec: CompositeSpec) -> CompositeSpec:
+    def transform_input_spec(self, input_spec: Composite) -> Composite:
         if self.batch_size is not None:
             return input_spec.expand(self.batch_size)
         return self.reshape_fn(input_spec)
@@ -8482,7 +8472,7 @@ class ActionDiscretizer(Transform):
     def transform_input_spec(self, input_spec):
         try:
             action_spec = input_spec["full_action_spec", self.in_keys_inv[0]]
-            if not isinstance(action_spec, BoundedTensorSpec):
+            if not isinstance(action_spec, Bounded):
                 raise TypeError(
                     f"action spec type {type(action_spec)} is not supported."
                 )
@@ -8541,9 +8531,9 @@ class ActionDiscretizer(Transform):
                 ]
 
             cls = (
-                functools.partial(MultiDiscreteTensorSpec, remove_singleton=False)
+                functools.partial(MultiCategorical, remove_singleton=False)
                 if self.categorical
-                else MultiOneHotDiscreteTensorSpec
+                else MultiOneHot
             )
 
             if not isinstance(num_intervals, torch.Tensor):

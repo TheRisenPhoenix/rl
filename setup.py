@@ -72,10 +72,10 @@ def _get_pytorch_version(is_nightly, is_local):
     # if "PYTORCH_VERSION" in os.environ:
     #     return f"torch=={os.environ['PYTORCH_VERSION']}"
     if is_nightly:
-        return "torch>=2.4.0.dev"
+        return "torch>=2.5.0.dev"
     elif is_local:
         return "torch"
-    return "torch>=2.3.0"
+    return "torch>=2.4.0"
 
 
 def _get_packages():
@@ -191,7 +191,7 @@ def _main(argv):
     # tag = _run_cmd(["git", "describe", "--tags", "--exact-match", "@"])
 
     this_directory = Path(__file__).parent
-    long_description = (this_directory / "README.md").read_text()
+    long_description = (this_directory / "README.md").read_text(encoding="utf8")
     sys.argv = [sys.argv[0]] + unknown
 
     extra_requires = {

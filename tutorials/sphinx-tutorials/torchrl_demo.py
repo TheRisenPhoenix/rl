@@ -170,7 +170,7 @@ This demo was presented at ICML 2022 on the industry demo day.
 # * a collection of algorithms: we do not intend to provide SOTA implementations of RL algorithms,
 #   but we provide these algorithms only as examples of how to use the library.
 #
-# * a research framework: modularity in TorchRL comes in two flavours. First, we try
+# * a research framework: modularity in TorchRL comes in two flavors. First, we try
 #   to build re-usable components, such that they can be easily swapped with each other.
 #   Second, we make our best such that components can be used independently of the rest
 #   of the library.
@@ -572,10 +572,10 @@ print(tensordict_exp)
 # ------------------------------
 
 torch.manual_seed(0)
-from torchrl.data import BoundedTensorSpec
+from torchrl.data import Bounded
 from torchrl.modules import SafeModule
 
-spec = BoundedTensorSpec(-torch.ones(3), torch.ones(3))
+spec = Bounded(-torch.ones(3), torch.ones(3))
 base_module = nn.Linear(5, 3)
 module = SafeModule(
     module=base_module, spec=spec, in_keys=["obs"], out_keys=["action"], safe=True
@@ -652,7 +652,7 @@ with set_exploration_type(ExplorationType.RANDOM):
     td_module(td)
     print("random:", td["action"])
 
-with set_exploration_type(ExplorationType.MODE):
+with set_exploration_type(ExplorationType.DETERMINISTIC):
     td_module(td)
     print("mode:", td["action"])
 

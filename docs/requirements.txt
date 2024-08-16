@@ -15,6 +15,7 @@ sphinx_design
 
 torchvision
 dm_control
+mujoco
 atari-py
 ale-py
 gym[classic_control,accept-rom-license]

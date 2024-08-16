@@ -54,6 +54,7 @@ class Storage:
     ndim = 1
     max_size: int
     _default_checkpointer: StorageCheckpointerBase = StorageCheckpointerBase
+    _rng: torch.Generator | None = None
 
     def __init__(
         self, max_size: int, checkpointer: StorageCheckpointerBase | None = None
@@ -142,7 +143,7 @@ class Storage:
     def _rand_given_ndim(self, batch_size):
         # a method to return random indices given the storage ndim
         if self.ndim == 1:
-            return torch.randint(0, len(self), (batch_size,))
+            return torch.randint(0, len(self), (batch_size,), generator=self._rng)
         raise RuntimeError(
             f"Random number generation is not implemented for storage of type {type(self)} with ndim {self.ndim}. "
             f"Please report this exception as well as the use case (incl. buffer construction) on github."
@@ -184,6 +185,11 @@ class Storage:
     def load(self, *args, **kwargs):
         """Alias for :meth:`~.loads`."""
         return self.loads(*args, **kwargs)
+
+    def __getstate__(self):
+        state = copy(self.__dict__)
+        state["_rng"] = None
+        return state
 
 
 class ListStorage(Storage):
@@ -299,7 +305,7 @@ class ListStorage(Storage):
             raise RuntimeError(
                 f"Cannot share a storage of type {type(self)} between processes."
             )
-        state = copy(self.__dict__)
+        state = super().__getstate__()
         return state
 
     def __repr__(self):
@@ -497,7 +503,9 @@ class TensorStorage(Storage):
         if self.ndim == 1:
             return super()._rand_given_ndim(batch_size)
         shape = self.shape
-        return tuple(torch.randint(_dim, (batch_size,)) for _dim in shape)
+        return tuple(
+            torch.randint(_dim, (batch_size,), generator=self._rng) for _dim in shape
+        )
 
     def flatten(self):
         if self.ndim == 1:
@@ -522,7 +530,7 @@ class TensorStorage(Storage):
         )
 
     def __getstate__(self):
-        state = copy(self.__dict__)
+        state = super().__getstate__()
         if get_spawning_popen() is None:
             length = self._len
             del state["_len_value"]
@@ -539,15 +547,24 @@ class TensorStorage(Storage):
             # check that the content is shared, otherwise tell the user we can't help
             storage = self._storage
             STORAGE_ERR = "The storage must be place in shared memory or memmapped before being shared between processes."
-            if is_tensor_collection(storage):
-                if not storage.is_memmap() and not storage.is_shared():
-                    raise RuntimeError(STORAGE_ERR)
-            else:
-                if (
-                    not isinstance(storage, MemoryMappedTensor)
-                    and not storage.is_shared()
+
+            # If the content is on cpu, it will be placed in shared memory.
+            # If it's on cuda it's already shared.
+            # If it's memmaped no worry in this case either.
+            # Only if the device is not "cpu" or "cuda" we may have a problem.
+            def assert_is_sharable(tensor):
+                if tensor.device is None or tensor.device.type in (
+                    "cuda",
+                    "cpu",
+                    "meta",
                 ):
-                    raise RuntimeError(STORAGE_ERR)
+                    return
+                raise RuntimeError(STORAGE_ERR)
+
+            if is_tensor_collection(storage):
+                storage.apply(assert_is_sharable, filter_empty=True)
+            else:
+                tree_map(storage, assert_is_sharable)
 
         return state
 
@@ -722,7 +739,7 @@ class TensorStorage(Storage):
                     "A cursor of length superior to the storage capacity was provided. "
                     "To accommodate for this, the cursor will be truncated to its last "
                     "element such that its length matched the length of the storage. "
-                    "This may **not** be the optimal behaviour for your application! "
+                    "This may **not** be the optimal behavior for your application! "
                     "Make sure that the storage capacity is big enough to support the "
                     "batch size provided."
                 )
@@ -916,6 +933,23 @@ class LazyMemmapStorage(LazyTensorStorage):
             measuring the storage size. For instance, a storage of shape ``[3, 4]``
             has capacity ``3`` if ``ndim=1`` and ``12`` if ``ndim=2``.
             Defaults to ``1``.
+
+    .. note:: When checkpointing a ``LazyMemmapStorage``, one can provide a path identical to where the storage is
+        already stored to avoid executing long copies of data that is already stored on disk.
+        This will only work if the default :class:`~torchrl.data.TensorStorageCheckpointer` checkpointer is used.
+        Example:
+            >>> from tensordict import TensorDict
+            >>> from torchrl.data import TensorStorage, LazyMemmapStorage, ReplayBuffer
+            >>> import tempfile
+            >>> from pathlib import Path
+            >>> import time
+            >>> td = TensorDict(a=0, b=1).expand(1000).clone()
+            >>> # We pass a path that is <main_ckpt_dir>/storage to LazyMemmapStorage
+            >>> rb_memmap = ReplayBuffer(storage=LazyMemmapStorage(10_000_000, scratch_dir="dump/storage"))
+            >>> rb_memmap.extend(td);
+            >>> # Checkpointing in `dump` is a zero-copy, as the data is already in `dump/storage`
+            >>> rb_memmap.dumps(Path("./dump"))
+
 
     Examples:
         >>> data = TensorDict({
@@ -1125,12 +1159,23 @@ class StorageEnsemble(Storage):
         *storages: Storage,
         transforms: List["Transform"] = None,  # noqa: F821
     ):
+        self._rng_private = None
         self._storages = storages
         self._transforms = transforms
         if transforms is not None and len(transforms) != len(storages):
             raise TypeError(
                 "transforms must have the same length as the storages " "provided."
             )
+
+    @property
+    def _rng(self):
+        return self._rng_private
+
+    @_rng.setter
+    def _rng(self, value):
+        self._rng_private = value
+        for storage in self._storages:
+            storage._rng = value
 
     @property
     def _attached_entities(self):

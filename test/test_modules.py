@@ -16,7 +16,7 @@ from mocking_classes import MockBatchedUnLockedEnv
 from packaging import version
 from tensordict import TensorDict
 from torch import nn
-from torchrl.data.tensor_specs import BoundedTensorSpec, CompositeSpec
+from torchrl.data.tensor_specs import Bounded, Composite
 from torchrl.modules import (
     CEMPlanner,
     DTActor,
@@ -466,9 +466,7 @@ class TestDreamerComponents:
     @pytest.mark.parametrize("deter_size", [20, 30])
     @pytest.mark.parametrize("action_size", [3, 6])
     def test_rssm_prior(self, device, batch_size, stoch_size, deter_size, action_size):
-        action_spec = BoundedTensorSpec(
-            shape=(action_size,), dtype=torch.float32, low=-1, high=1
-        )
+        action_spec = Bounded(shape=(action_size,), dtype=torch.float32, low=-1, high=1)
         rssm_prior = RSSMPrior(
             action_spec,
             hidden_dim=stoch_size,
@@ -521,9 +519,7 @@ class TestDreamerComponents:
     def test_rssm_rollout(
         self, device, batch_size, temporal_size, stoch_size, deter_size, action_size
     ):
-        action_spec = BoundedTensorSpec(
-            shape=(action_size,), dtype=torch.float32, low=-1, high=1
-        )
+        action_spec = Bounded(shape=(action_size,), dtype=torch.float32, low=-1, high=1)
         rssm_prior = RSSMPrior(
             action_spec,
             hidden_dim=stoch_size,
@@ -650,10 +646,10 @@ class TestTanh:
         ):
             TanhModule(in_keys=["a", "b"], out_keys=["a"])
         with pytest.raises(ValueError, match=r"The minimum value \(-2\) provided"):
-            spec = BoundedTensorSpec(-1, 1, shape=())
+            spec = Bounded(-1, 1, shape=())
             TanhModule(in_keys=["act"], low=-2, spec=spec)
         with pytest.raises(ValueError, match=r"The maximum value \(-2\) provided to"):
-            spec = BoundedTensorSpec(-1, 1, shape=())
+            spec = Bounded(-1, 1, shape=())
             TanhModule(in_keys=["act"], high=-2, spec=spec)
         with pytest.raises(ValueError, match="Got high < low"):
             TanhModule(in_keys=["act"], high=-2, low=-1)
@@ -709,12 +705,12 @@ class TestTanh:
         if any(has_spec):
             spec = {}
             if has_spec[0]:
-                spec.update({real_out_keys[0]: BoundedTensorSpec(-2.0, 2.0, shape=())})
+                spec.update({real_out_keys[0]: Bounded(-2.0, 2.0, shape=())})
                 low, high = -2.0, 2.0
             if has_spec[1]:
-                spec.update({real_out_keys[1]: BoundedTensorSpec(-3.0, 3.0, shape=())})
+                spec.update({real_out_keys[1]: Bounded(-3.0, 3.0, shape=())})
                 low, high = None, None
-            spec = CompositeSpec(spec)
+            spec = Composite(spec)
         else:
             spec = None
             low, high = -2.0, 2.0
@@ -897,6 +893,51 @@ class TestMultiAgent:
         assert (mlp.params == 0).all()
         mlp.from_stateful_net(snet)
         assert (mlp.params == 1).all()
+
+    @retry(AssertionError, 5)
+    @pytest.mark.parametrize("n_agents", [3])
+    @pytest.mark.parametrize("share_params", [True])
+    @pytest.mark.parametrize("centralized", [True])
+    @pytest.mark.parametrize("n_agent_inputs", [6])
+    @pytest.mark.parametrize("batch", [(4,)])
+    @pytest.mark.parametrize("tdparams", [True, False])
+    def test_multiagent_mlp_tdparams(
+        self,
+        n_agents,
+        centralized,
+        share_params,
+        batch,
+        n_agent_inputs,
+        tdparams,
+        n_agent_outputs=2,
+    ):
+        torch.manual_seed(1)
+        mlp = MultiAgentMLP(
+            n_agent_inputs=n_agent_inputs,
+            n_agent_outputs=n_agent_outputs,
+            n_agents=n_agents,
+            centralized=centralized,
+            share_params=share_params,
+            depth=2,
+            use_td_params=tdparams,
+        )
+        if tdparams:
+            assert list(mlp._empty_net.parameters()) == []
+            assert list(mlp.params.parameters()) == list(mlp.parameters())
+        else:
+            assert list(mlp._empty_net.parameters()) == list(mlp.parameters())
+            assert not hasattr(mlp.params, "parameters")
+        if torch.backends.mps.is_available():
+            device = torch.device("mps")
+        elif torch.cuda.is_available():
+            device = torch.device("cuda")
+        else:
+            return
+        mlp = nn.Sequential(mlp)
+        mlp_device = mlp.to(device)
+        param_set = set(mlp.parameters())
+        for p in mlp[0].params.values(True, True):
+            assert p in param_set
 
     def test_multiagent_mlp_lazy(self):
         mlp = MultiAgentMLP(

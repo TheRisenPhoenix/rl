@@ -68,12 +68,13 @@ from torchrl.collectors.collectors import (
 )
 from torchrl.collectors.utils import split_trajectories
 from torchrl.data import (
-    CompositeSpec,
+    Composite,
+    LazyMemmapStorage,
     LazyTensorStorage,
-    NonTensorSpec,
+    NonTensor,
     ReplayBuffer,
     TensorSpec,
-    UnboundedContinuousTensorSpec,
+    Unbounded,
 )
 from torchrl.envs import (
     EnvBase,
@@ -210,22 +211,16 @@ class TestCollectorDevices:
         def __init__(self, default_device):
             self.default_device = default_device
             super().__init__(device=None)
-            self.observation_spec = CompositeSpec(
-                observation=UnboundedContinuousTensorSpec((), device=default_device)
+            self.observation_spec = Composite(
+                observation=Unbounded((), device=default_device)
             )
-            self.reward_spec = UnboundedContinuousTensorSpec(1, device=default_device)
-            self.full_done_spec = CompositeSpec(
-                done=UnboundedContinuousTensorSpec(
-                    1, dtype=torch.bool, device=self.default_device
-                ),
-                truncated=UnboundedContinuousTensorSpec(
-                    1, dtype=torch.bool, device=self.default_device
-                ),
-                terminated=UnboundedContinuousTensorSpec(
-                    1, dtype=torch.bool, device=self.default_device
-                ),
+            self.reward_spec = Unbounded(1, device=default_device)
+            self.full_done_spec = Composite(
+                done=Unbounded(1, dtype=torch.bool, device=self.default_device),
+                truncated=Unbounded(1, dtype=torch.bool, device=self.default_device),
+                terminated=Unbounded(1, dtype=torch.bool, device=self.default_device),
             )
-            self.action_spec = UnboundedContinuousTensorSpec((), device=None)
+            self.action_spec = Unbounded((), device=None)
             assert self.device is None
             assert self.full_observation_spec is not None
             assert self.full_done_spec is not None
@@ -268,29 +263,17 @@ class TestCollectorDevices:
         def __init__(self, default_device):
             self.default_device = default_device
             super().__init__(device=self.default_device)
-            self.observation_spec = CompositeSpec(
-                observation=UnboundedContinuousTensorSpec(
-                    (), device=self.default_device
-                )
+            self.observation_spec = Composite(
+                observation=Unbounded((), device=self.default_device)
             )
-            self.reward_spec = UnboundedContinuousTensorSpec(
-                1, device=self.default_device
-            )
-            self.full_done_spec = CompositeSpec(
-                done=UnboundedContinuousTensorSpec(
-                    1, dtype=torch.bool, device=self.default_device
-                ),
-                truncated=UnboundedContinuousTensorSpec(
-                    1, dtype=torch.bool, device=self.default_device
-                ),
-                terminated=UnboundedContinuousTensorSpec(
-                    1, dtype=torch.bool, device=self.default_device
-                ),
+            self.reward_spec = Unbounded(1, device=self.default_device)
+            self.full_done_spec = Composite(
+                done=Unbounded(1, dtype=torch.bool, device=self.default_device),
+                truncated=Unbounded(1, dtype=torch.bool, device=self.default_device),
+                terminated=Unbounded(1, dtype=torch.bool, device=self.default_device),
                 device=self.default_device,
             )
-            self.action_spec = UnboundedContinuousTensorSpec(
-                (), device=self.default_device
-            )
+            self.action_spec = Unbounded((), device=self.default_device)
             assert self.device == _make_ordinal_device(
                 torch.device(self.default_device)
             )
@@ -1295,7 +1278,7 @@ def test_excluded_keys(collector_class, exclude, out_key):
         policy,
         copier,
         OrnsteinUhlenbeckProcessModule(
-            spec=CompositeSpec({key: None for key in policy.out_keys})
+            spec=Composite({key: None for key in policy.out_keys})
         ),
     )
 
@@ -1368,12 +1351,12 @@ def test_collector_output_keys(
         ],
     }
     if explicit_spec:
-        hidden_spec = UnboundedContinuousTensorSpec((1, hidden_size))
-        policy_kwargs["spec"] = CompositeSpec(
-            action=UnboundedContinuousTensorSpec(),
+        hidden_spec = Unbounded((1, hidden_size))
+        policy_kwargs["spec"] = Composite(
+            action=Unbounded(),
             hidden1=hidden_spec,
             hidden2=hidden_spec,
-            next=CompositeSpec(hidden1=hidden_spec, hidden2=hidden_spec),
+            next=Composite(hidden1=hidden_spec, hidden2=hidden_spec),
         )
 
     policy = SafeModule(**policy_kwargs)
@@ -2170,15 +2153,9 @@ class TestUpdateParams:
         def __init__(self, device, batch_size=[]):  # noqa: B006
             super().__init__(batch_size=batch_size, device=device)
             self.state = torch.zeros(self.batch_size, device=device)
-            self.observation_spec = CompositeSpec(
-                state=UnboundedContinuousTensorSpec(shape=(), device=device)
-            )
-            self.action_spec = UnboundedContinuousTensorSpec(
-                shape=batch_size, device=device
-            )
-            self.reward_spec = UnboundedContinuousTensorSpec(
-                shape=(*batch_size, 1), device=device
-            )
+            self.observation_spec = Composite(state=Unbounded(shape=(), device=device))
+            self.action_spec = Unbounded(shape=batch_size, device=device)
+            self.reward_spec = Unbounded(shape=(*batch_size, 1), device=device)
 
         def _step(
             self,
@@ -2609,8 +2586,15 @@ class TestUniqueTraj:
                 buffer.extend(d)
             assert c._use_buffers
             traj_ids = buffer[:].get(("collector", "traj_ids"))
-            # check that we have as many trajs as expected (no skip)
-            assert traj_ids.unique().numel() == traj_ids.max() + 1
+            # Ideally, we'd like that (sorted_traj.values == sorted_traj.indices).all()
+            #  but in practice, one env can reach the end of the rollout and do a reset
+            #  (which we don't want to prevent) and increment the global traj count,
+            #  when the others have not finished yet. In that case, this traj number will never
+            #  appear.
+            # sorted_traj = traj_ids.unique().sort()
+            # assert (sorted_traj.values == sorted_traj.indices).all()
+            # assert traj_ids.unique().numel() == traj_ids.max() + 1
+
             # check that trajs are not overlapping
             if stack_results:
                 sets = [
@@ -2685,7 +2669,7 @@ class TestCollectorsNonTensor:
         def transform_observation_spec(
             self, observation_spec: TensorSpec
         ) -> TensorSpec:
-            observation_spec["nt"] = NonTensorSpec(shape=())
+            observation_spec["nt"] = NonTensor(shape=())
             return observation_spec
 
     @classmethod
@@ -2773,6 +2757,156 @@ class TestCollectorsNonTensor:
         finally:
             collector.shutdown()
             del collector
+
+
+class TestCollectorRB:
+    @pytest.mark.skipif(not _has_gym, reason="requires gym.")
+    def test_collector_rb_sync(self):
+        env = SerialEnv(8, lambda cp=CARTPOLE_VERSIONED(): GymEnv(cp))
+        env.set_seed(0)
+        rb = ReplayBuffer(storage=LazyTensorStorage(256, ndim=2), batch_size=5)
+        collector = SyncDataCollector(
+            env,
+            RandomPolicy(env.action_spec),
+            replay_buffer=rb,
+            total_frames=256,
+            frames_per_batch=16,
+        )
+        torch.manual_seed(0)
+
+        for c in collector:
+            assert c is None
+            rb.sample()
+        rbdata0 = rb[:].clone()
+        collector.shutdown()
+        if not env.is_closed:
+            env.close()
+        del collector, env
+
+        env = SerialEnv(8, lambda cp=CARTPOLE_VERSIONED(): GymEnv(cp))
+        env.set_seed(0)
+        rb = ReplayBuffer(storage=LazyTensorStorage(256, ndim=2), batch_size=5)
+        collector = SyncDataCollector(
+            env, RandomPolicy(env.action_spec), total_frames=256, frames_per_batch=16
+        )
+        torch.manual_seed(0)
+
+        for i, c in enumerate(collector):
+            rb.extend(c)
+            torch.testing.assert_close(
+                rbdata0[:, : (i + 1) * 2]["observation"], rb[:]["observation"]
+            )
+            assert c is not None
+            rb.sample()
+
+        rbdata1 = rb[:].clone()
+        collector.shutdown()
+        if not env.is_closed:
+            env.close()
+        del collector, env
+        assert assert_allclose_td(rbdata0, rbdata1)
+
+    @pytest.mark.skipif(not _has_gym, reason="requires gym.")
+    @pytest.mark.parametrize("replay_buffer_chunk", [False, True])
+    @pytest.mark.parametrize("env_creator", [False, True])
+    @pytest.mark.parametrize("storagetype", [LazyTensorStorage, LazyMemmapStorage])
+    def test_collector_rb_multisync(
+        self, replay_buffer_chunk, env_creator, storagetype, tmpdir
+    ):
+        if not env_creator:
+            env = GymEnv(CARTPOLE_VERSIONED()).append_transform(StepCounter())
+            env.set_seed(0)
+            action_spec = env.action_spec
+            env = lambda env=env: env
+        else:
+            env = EnvCreator(
+                lambda cp=CARTPOLE_VERSIONED(): GymEnv(cp).append_transform(
+                    StepCounter()
+                )
+            )
+            action_spec = env.meta_data.specs["input_spec", "full_action_spec"]
+
+        if storagetype == LazyMemmapStorage:
+            storagetype = functools.partial(LazyMemmapStorage, scratch_dir=tmpdir)
+        rb = ReplayBuffer(storage=storagetype(256), batch_size=5)
+
+        collector = MultiSyncDataCollector(
+            [env, env],
+            RandomPolicy(action_spec),
+            replay_buffer=rb,
+            total_frames=256,
+            frames_per_batch=32,
+            replay_buffer_chunk=replay_buffer_chunk,
+        )
+        torch.manual_seed(0)
+        pred_len = 0
+        for c in collector:
+            pred_len += 32
+            assert c is None
+            assert len(rb) == pred_len
+        collector.shutdown()
+        assert len(rb) == 256
+        if not replay_buffer_chunk:
+            steps_counts = rb["step_count"].squeeze().split(16)
+            collector_ids = rb["collector", "traj_ids"].squeeze().split(16)
+            for step_count, ids in zip(steps_counts, collector_ids):
+                step_countdiff = step_count.diff()
+                idsdiff = ids.diff()
+                assert (
+                    (step_countdiff == 1) | (step_countdiff < 0)
+                ).all(), steps_counts
+                assert (idsdiff >= 0).all()
+
+    @pytest.mark.skipif(not _has_gym, reason="requires gym.")
+    @pytest.mark.parametrize("replay_buffer_chunk", [False, True])
+    @pytest.mark.parametrize("env_creator", [False, True])
+    @pytest.mark.parametrize("storagetype", [LazyTensorStorage, LazyMemmapStorage])
+    def test_collector_rb_multiasync(
+        self, replay_buffer_chunk, env_creator, storagetype, tmpdir
+    ):
+        if not env_creator:
+            env = GymEnv(CARTPOLE_VERSIONED()).append_transform(StepCounter())
+            env.set_seed(0)
+            action_spec = env.action_spec
+            env = lambda env=env: env
+        else:
+            env = EnvCreator(
+                lambda cp=CARTPOLE_VERSIONED(): GymEnv(cp).append_transform(
+                    StepCounter()
+                )
+            )
+            action_spec = env.meta_data.specs["input_spec", "full_action_spec"]
+
+        if storagetype == LazyMemmapStorage:
+            storagetype = functools.partial(LazyMemmapStorage, scratch_dir=tmpdir)
+        rb = ReplayBuffer(storage=storagetype(256), batch_size=5)
+
+        collector = MultiaSyncDataCollector(
+            [env, env],
+            RandomPolicy(action_spec),
+            replay_buffer=rb,
+            total_frames=256,
+            frames_per_batch=16,
+            replay_buffer_chunk=replay_buffer_chunk,
+        )
+        torch.manual_seed(0)
+        pred_len = 0
+        for c in collector:
+            pred_len += 16
+            assert c is None
+            assert len(rb) >= pred_len
+        collector.shutdown()
+        assert len(rb) == 256
+        if not replay_buffer_chunk:
+            steps_counts = rb["step_count"].squeeze().split(16)
+            collector_ids = rb["collector", "traj_ids"].squeeze().split(16)
+            for step_count, ids in zip(steps_counts, collector_ids):
+                step_countdiff = step_count.diff()
+                idsdiff = ids.diff()
+                assert (
+                    (step_countdiff == 1) | (step_countdiff < 0)
+                ).all(), steps_counts
+                assert (idsdiff >= 0).all()
 
 
 if __name__ == "__main__":

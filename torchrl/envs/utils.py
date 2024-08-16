@@ -47,10 +47,10 @@ from torch.utils._pytree import tree_map
 from torchrl._utils import _replace_last, _rng_decorator, logger as torchrl_logger
 
 from torchrl.data.tensor_specs import (
-    CompositeSpec,
-    NO_DEFAULT,
+    Composite,
+    NO_DEFAULT_RL as NO_DEFAULT,
     TensorSpec,
-    UnboundedContinuousTensorSpec,
+    Unbounded,
 )
 from torchrl.data.utils import check_no_exclusive_keys
 
@@ -360,7 +360,7 @@ def step_mdp(
 
     Given a tensordict retrieved after a step, returns the :obj:`"next"` indexed-tensordict.
     The arguments allow for a precise control over what should be kept and what
-    should be copied from the ``"next"`` entry. The default behaviour is:
+    should be copied from the ``"next"`` entry. The default behavior is:
     move the observation entries, reward and done states to the root, exclude
     the current action and keep all extra keys (non-action, non-done, non-reward).
 
@@ -823,7 +823,7 @@ def check_env_specs(
                 "you will need to first pass your stack through `torchrl.data.consolidate_spec`."
             )
         if spec is None:
-            spec = CompositeSpec(shape=env.batch_size, device=env.device)
+            spec = Composite(shape=env.batch_size, device=env.device)
         td = last_td.select(*spec.keys(True, True), strict=True)
         if not spec.contains(td):
             raise AssertionError(
@@ -835,7 +835,7 @@ def check_env_specs(
         ("obs", full_observation_spec),
     ):
         if spec is None:
-            spec = CompositeSpec(shape=env.batch_size, device=env.device)
+            spec = Composite(shape=env.batch_size, device=env.device)
         td = last_td.get("next").select(*spec.keys(True, True), strict=True)
         if not spec.contains(td):
             raise AssertionError(
@@ -870,10 +870,10 @@ def _sort_keys(element):
 
 
 def make_composite_from_td(data, unsqueeze_null_shapes: bool = True):
-    """Creates a CompositeSpec instance from a tensordict, assuming all values are unbounded.
+    """Creates a Composite instance from a tensordict, assuming all values are unbounded.
 
     Args:
-        data (tensordict.TensorDict): a tensordict to be mapped onto a CompositeSpec.
+        data (tensordict.TensorDict): a tensordict to be mapped onto a Composite.
         unsqueeze_null_shapes (bool, optional): if ``True``, every empty shape will be
             unsqueezed to (1,). Defaults to ``True``.
 
@@ -886,25 +886,25 @@ def make_composite_from_td(data, unsqueeze_null_shapes: bool = True):
         ... }, [])
         >>> spec = make_composite_from_td(data)
         >>> print(spec)
-        CompositeSpec(
-            obs: UnboundedContinuousTensorSpec(
+        Composite(
+            obs: UnboundedContinuous(
                  shape=torch.Size([3]), space=None, device=cpu, dtype=torch.float32, domain=continuous),
-            action: UnboundedContinuousTensorSpec(
+            action: UnboundedContinuous(
                  shape=torch.Size([2]), space=None, device=cpu, dtype=torch.int32, domain=continuous),
-            next: CompositeSpec(
-                obs: UnboundedContinuousTensorSpec(
+            next: Composite(
+                obs: UnboundedContinuous(
                      shape=torch.Size([3]), space=None, device=cpu, dtype=torch.float32, domain=continuous),
-                reward: UnboundedContinuousTensorSpec(
+                reward: UnboundedContinuous(
                      shape=torch.Size([1]), space=ContinuousBox(low=Tensor(shape=torch.Size([]), device=cpu, dtype=torch.float32, contiguous=True), high=Tensor(shape=torch.Size([]), device=cpu, dtype=torch.float32, contiguous=True)), device=cpu, dtype=torch.float32, domain=continuous), device=cpu, shape=torch.Size([])), device=cpu, shape=torch.Size([]))
         >>> assert (spec.zero() == data.zero_()).all()
     """
     # custom funtion to convert a tensordict in a similar spec structure
     # of unbounded values.
-    composite = CompositeSpec(
+    composite = Composite(
         {
             key: make_composite_from_td(tensor)
             if isinstance(tensor, TensorDictBase)
-            else UnboundedContinuousTensorSpec(
+            else Unbounded(
                 dtype=tensor.dtype,
                 device=tensor.device,
                 shape=tensor.shape
@@ -1094,14 +1094,14 @@ def _terminated_or_truncated(
         contained a ``True``.
 
     Examples:
-        >>> from torchrl.data.tensor_specs import DiscreteTensorSpec
+        >>> from torchrl.data.tensor_specs import Categorical
         >>> from tensordict import TensorDict
-        >>> spec = CompositeSpec(
-        ...     done=DiscreteTensorSpec(2, dtype=torch.bool),
-        ...     truncated=DiscreteTensorSpec(2, dtype=torch.bool),
-        ...     nested=CompositeSpec(
-        ...         done=DiscreteTensorSpec(2, dtype=torch.bool),
-        ...         truncated=DiscreteTensorSpec(2, dtype=torch.bool),
+        >>> spec = Composite(
+        ...     done=Categorical(2, dtype=torch.bool),
+        ...     truncated=Categorical(2, dtype=torch.bool),
+        ...     nested=Composite(
+        ...         done=Categorical(2, dtype=torch.bool),
+        ...         truncated=Categorical(2, dtype=torch.bool),
         ...     )
         ... )
         >>> data = TensorDict({
@@ -1147,7 +1147,7 @@ def _terminated_or_truncated(
             composite_spec = {}
             found_leaf = 0
             for eot_key, item in full_done_spec.items():
-                if isinstance(item, CompositeSpec):
+                if isinstance(item, Composite):
                     composite_spec[eot_key] = item
                 else:
                     found_leaf += 1
@@ -1219,14 +1219,14 @@ def terminated_or_truncated(
         contained a ``True``.
 
     Examples:
-        >>> from torchrl.data.tensor_specs import DiscreteTensorSpec
+        >>> from torchrl.data.tensor_specs import Categorical
         >>> from tensordict import TensorDict
-        >>> spec = CompositeSpec(
-        ...     done=DiscreteTensorSpec(2, dtype=torch.bool),
-        ...     truncated=DiscreteTensorSpec(2, dtype=torch.bool),
-        ...     nested=CompositeSpec(
-        ...         done=DiscreteTensorSpec(2, dtype=torch.bool),
-        ...         truncated=DiscreteTensorSpec(2, dtype=torch.bool),
+        >>> spec = Composite(
+        ...     done=Categorical(2, dtype=torch.bool),
+        ...     truncated=Categorical(2, dtype=torch.bool),
+        ...     nested=Composite(
+        ...         done=Categorical(2, dtype=torch.bool),
+        ...         truncated=Categorical(2, dtype=torch.bool),
         ...     )
         ... )
         >>> data = TensorDict({
@@ -1274,7 +1274,7 @@ def terminated_or_truncated(
                     )
         else:
             for eot_key, item in full_done_spec.items():
-                if isinstance(item, CompositeSpec):
+                if isinstance(item, Composite):
                     any_eot = any_eot | inner_terminated_or_truncated(
                         data=data.get(eot_key),
                         full_done_spec=item,
@@ -1503,7 +1503,7 @@ def _make_compatible_policy(policy, observation_spec, env=None, fast_wrap=False)
     If you want TorchRL to automatically wrap your policy with a TensorDictModule
     then the arguments to policy.forward must correspond one-to-one with entries
     in env.observation_spec.
-    For more complex behaviour and more control you can consider writing your
+    For more complex behavior and more control you can consider writing your
     own TensorDictModule.
     Check the collector documentation to know more about accepted policies.
     """
@@ -1541,7 +1541,7 @@ def _policy_is_tensordict_compatible(policy: nn.Module):
 
     # if in_keys or out_keys were defined but policy is not a TensorDictModule or
     # accepts multiple arguments then it's likely the user is trying to do something
-    # that will have undetermined behaviour, we raise an error
+    # that will have undetermined behavior, we raise an error
     raise TypeError(
         "Received a policy that defines in_keys or out_keys and also expects multiple "
         "arguments to policy.forward. If the policy is compatible with TensorDict, it "
@@ -1562,8 +1562,8 @@ class RandomPolicy:
 
     Examples:
         >>> from tensordict import TensorDict
-        >>> from torchrl.data.tensor_specs import BoundedTensorSpec
-        >>> action_spec = BoundedTensorSpec(-torch.ones(3), torch.ones(3))
+        >>> from torchrl.data.tensor_specs import Bounded
+        >>> action_spec = Bounded(-torch.ones(3), torch.ones(3))
         >>> actor = RandomPolicy(action_spec=action_spec)
         >>> td = actor(TensorDict({}, batch_size=[])) # selects a random action in the cube [-1; 1]
     """
@@ -1574,7 +1574,7 @@ class RandomPolicy:
         self.action_key = action_key
 
     def __call__(self, td: TensorDictBase) -> TensorDictBase:
-        if isinstance(self.action_spec, CompositeSpec):
+        if isinstance(self.action_spec, Composite):
             return td.update(self.action_spec.rand())
         else:
             return td.set(self.action_key, self.action_spec.rand())

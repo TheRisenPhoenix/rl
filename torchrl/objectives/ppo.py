@@ -45,15 +45,15 @@ from torchrl.objectives.value import (
 class PPOLoss(LossModule):
     """A parent PPO loss class.
 
-    PPO (Proximal Policy Optimisation) is a model-free, online RL algorithm
+    PPO (Proximal Policy Optimization) is a model-free, online RL algorithm
     that makes use of a recorded (batch of)
     trajectories to perform several optimization steps, while actively
     preventing the updated policy to deviate too
     much from its original parameter configuration.
 
-    PPO loss can be found in different flavours, depending on the way the
-    constrained optimisation is implemented: ClipPPOLoss and KLPENPPOLoss.
-    Unlike its subclasses, this class does not implement any regularisation
+    PPO loss can be found in different flavors, depending on the way the
+    constrained optimization is implemented: ClipPPOLoss and KLPENPPOLoss.
+    Unlike its subclasses, this class does not implement any regularization
     and should therefore be used cautiously.
 
     For more details regarding PPO, refer to: "Proximal Policy Optimization Algorithms",
@@ -141,7 +141,7 @@ class PPOLoss(LossModule):
         >>> actor_head = SomeActor(in_keys=["hidden"])
         >>> value_head = SomeValue(in_keys=["hidden"])
         >>> # first option, with 2 calls on the common module
-        >>> model = ActorCriticOperator(common, actor_head, value_head)
+        >>> model = ActorValueOperator(common, actor_head, value_head)
         >>> loss_module = PPOLoss(model.get_policy_operator(), model.get_value_operator())
         >>> # second option, with a single call to the common module
         >>> loss_module = PPOLoss(ProbabilisticTensorDictSequential(model, actor_head), value_head)
@@ -151,14 +151,14 @@ class PPOLoss(LossModule):
     Examples:
         >>> import torch
         >>> from torch import nn
-        >>> from torchrl.data.tensor_specs import BoundedTensorSpec
+        >>> from torchrl.data.tensor_specs import Bounded
         >>> from torchrl.modules.distributions import NormalParamExtractor, TanhNormal
         >>> from torchrl.modules.tensordict_module.actors import ProbabilisticActor, ValueOperator
         >>> from torchrl.modules.tensordict_module.common import SafeModule
         >>> from torchrl.objectives.ppo import PPOLoss
         >>> from tensordict import TensorDict
         >>> n_act, n_obs = 4, 3
-        >>> spec = BoundedTensorSpec(-torch.ones(n_act), torch.ones(n_act), (n_act,))
+        >>> spec = Bounded(-torch.ones(n_act), torch.ones(n_act), (n_act,))
         >>> base_layer = nn.Linear(n_obs, 5)
         >>> net = nn.Sequential(base_layer, nn.Linear(5, 2 * n_act), NormalParamExtractor())
         >>> module = SafeModule(net, in_keys=["observation"], out_keys=["loc", "scale"])
@@ -204,13 +204,13 @@ class PPOLoss(LossModule):
     Examples:
         >>> import torch
         >>> from torch import nn
-        >>> from torchrl.data.tensor_specs import BoundedTensorSpec
+        >>> from torchrl.data.tensor_specs import Bounded
         >>> from torchrl.modules.distributions import NormalParamExtractor, TanhNormal
         >>> from torchrl.modules.tensordict_module.actors import ProbabilisticActor, ValueOperator
         >>> from torchrl.modules.tensordict_module.common import SafeModule
         >>> from torchrl.objectives.ppo import PPOLoss
         >>> n_act, n_obs = 4, 3
-        >>> spec = BoundedTensorSpec(-torch.ones(n_act), torch.ones(n_act), (n_act,))
+        >>> spec = Bounded(-torch.ones(n_act), torch.ones(n_act), (n_act,))
         >>> base_layer = nn.Linear(n_obs, 5)
         >>> net = nn.Sequential(base_layer, nn.Linear(5, 2 * n_act), NormalParamExtractor())
         >>> module = SafeModule(net, in_keys=["observation"], out_keys=["loc", "scale"])
@@ -482,9 +482,10 @@ class PPOLoss(LossModule):
         # overhead that we could easily reduce.
         if self.separate_losses:
             tensordict = tensordict.detach()
-        try:
-            target_return = tensordict.get(self.tensor_keys.value_target)
-        except KeyError:
+        target_return = tensordict.get(
+            self.tensor_keys.value_target, None
+        )  # TODO: None soon to be removed
+        if target_return is None:
             raise KeyError(
                 f"the key {self.tensor_keys.value_target} was not found in the input tensordict. "
                 f"Make sure you provided the right key and the value_target (i.e. the target "
@@ -494,9 +495,10 @@ class PPOLoss(LossModule):
             )
 
         if self.clip_value:
-            try:
-                old_state_value = tensordict.get(self.tensor_keys.value)
-            except KeyError:
+            old_state_value = tensordict.get(
+                self.tensor_keys.value, None
+            )  # TODO: None soon to be removed
+            if old_state_value is None:
                 raise KeyError(
                     f"clip_value is set to {self.clip_value}, but "
                     f"the key {self.tensor_keys.value} was not found in the input tensordict. "
@@ -508,9 +510,10 @@ class PPOLoss(LossModule):
         ) if self.functional else contextlib.nullcontext():
             state_value_td = self.critic_network(tensordict)
 
-        try:
-            state_value = state_value_td.get(self.tensor_keys.value)
-        except KeyError:
+        state_value = state_value_td.get(
+            self.tensor_keys.value, None
+        )  # TODO: None soon to be removed
+        if state_value is None:
             raise KeyError(
                 f"the key {self.tensor_keys.value} was not found in the critic output tensordict. "
                 f"Make sure that the value_key passed to PPO is accurate."
@@ -718,10 +721,10 @@ class ClipPPOLoss(PPOLoss):
         >>> actor_head = SomeActor(in_keys=["hidden"])
         >>> value_head = SomeValue(in_keys=["hidden"])
         >>> # first option, with 2 calls on the common module
-        >>> model = ActorCriticOperator(common, actor_head, value_head)
-        >>> loss_module = PPOLoss(model.get_policy_operator(), model.get_value_operator())
+        >>> model = ActorValueOperator(common, actor_head, value_head)
+        >>> loss_module = ClipPPOLoss(model.get_policy_operator(), model.get_value_operator())
         >>> # second option, with a single call to the common module
-        >>> loss_module = PPOLoss(ProbabilisticTensorDictSequential(model, actor_head), value_head)
+        >>> loss_module = ClipPPOLoss(ProbabilisticTensorDictSequential(model, actor_head), value_head)
 
       This will work regardless of whether separate_losses is activated or not.
 
@@ -955,10 +958,10 @@ class KLPENPPOLoss(PPOLoss):
         >>> actor_head = SomeActor(in_keys=["hidden"])
         >>> value_head = SomeValue(in_keys=["hidden"])
         >>> # first option, with 2 calls on the common module
-        >>> model = ActorCriticOperator(common, actor_head, value_head)
-        >>> loss_module = PPOLoss(model.get_policy_operator(), model.get_value_operator())
+        >>> model = ActorValueOperator(common, actor_head, value_head)
+        >>> loss_module = KLPENPPOLoss(model.get_policy_operator(), model.get_value_operator())
         >>> # second option, with a single call to the common module
-        >>> loss_module = PPOLoss(ProbabilisticTensorDictSequential(model, actor_head), value_head)
+        >>> loss_module = KLPENPPOLoss(ProbabilisticTensorDictSequential(model, actor_head), value_head)
 
       This will work regardless of whether separate_losses is activated or not.
 
