@@ -8,14 +8,16 @@ import functools
 import re
 import warnings
 from enum import Enum
-from typing import Iterable, Optional, Union
+from typing import Iterable, Optional, Tuple, Union
 
 import torch
 from tensordict import TensorDict, TensorDictBase
 from tensordict.nn import TensorDictModule
+from tensordict.utils import _zip_strict
 from torch import nn, Tensor
 from torch.nn import functional as F
 from torch.nn.modules import dropout
+from torch.utils._pytree import tree_map
 
 try:
     from torch import vmap
@@ -480,27 +482,130 @@ def _cache_values(fun):
     return new_fun
 
 
-def _vmap_func(module, *args, func=None, **kwargs):
-    try:
+def _capture_vmap_error(func):
+    @functools.wraps(func)
+    def new_func(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except RuntimeError as err:
+            if re.match(
+                r"vmap: called random operation while in randomness error mode",
+                str(err),
+            ):
+                raise RuntimeError(
+                    "Please use <loss_module>.set_vmap_randomness('different') to handle random operations during vmap."
+                ) from err
+
+    return new_func
+
+
+def _maybe_vmap_maybe_func(
+    module, *args, func=None, use_vmap: bool = True, functional: bool = True, **kwargs
+):
+    randomness = kwargs.pop("randomness", "error")
+    if functional:
+        if func is None:
+            func = "forward"
+        func = getattr(module, func)
 
         def decorated_module(*module_args_params):
             params = module_args_params[-1]
             module_args = module_args_params[:-1]
             with params.to_module(module):
-                if func is None:
-                    return module(*module_args)
-                else:
-                    return getattr(module, func)(*module_args)
+                return func(*module_args)
 
-        return vmap(decorated_module, *args, **kwargs)  # noqa: TOR101
+        if use_vmap:
+            out = vmap(  # noqa: TOR101
+                decorated_module, *args, randomness=randomness, **kwargs
+            )
+            return _capture_vmap_error(out)
+        else:
+            return _LoopVmapModule(module, *args, func=func, **kwargs, functional=True)
+    else:
+        if use_vmap:
+            # This should be rarely reached - we don't allow vmap + non functional in losses
+            out = vmap(func, *args, randomness=randomness, **kwargs)  # noqa: TOR101
+            return _capture_vmap_error(out)
+        else:
+            # we still need to iterate over the module
+            return _LoopVmapModule(module, *args, func=func, **kwargs, functional=False)
 
-    except RuntimeError as err:
-        if re.match(
-            r"vmap: called random operation while in randomness error mode", str(err)
-        ):
-            raise RuntimeError(
-                "Please use <loss_module>.set_vmap_randomness('different') to handle random operations during vmap."
-            ) from err
+
+class _LoopVmapModule(nn.Module):
+    def __init__(
+        self,
+        module: nn.Module,
+        in_dims: Tuple[int | None] = None,
+        out_dims: Tuple[int | None] = None,
+        func=None,
+        register_module: bool = False,
+        functional: bool = False,
+    ):
+        super().__init__()
+        self.register_module = register_module
+        if not register_module:
+            self.__dict__["module"] = module
+        else:
+            self.module = module
+        if func is None:
+            func = "forward"
+        self.func = func
+        self.in_dims = in_dims
+        if out_dims is not None:
+            raise NotImplementedError("out_dims not implemented yet.")
+        self.out_dims = out_dims
+        self.functional = functional
+
+    def forward(self, *args):
+        n = None
+        to_rep = []
+        if self.in_dims is None:
+            self.in_dims = [0] * len(args)
+
+        if not self.functional:
+            args = args[:-1]
+            in_dims = self.in_dims[:-1]
+        else:
+            in_dims = self.in_dims
+
+        args = list(args)
+        for i, (arg, in_dim) in enumerate(_zip_strict(args, in_dims)):
+            if not self.functional and n is None:
+                n = len(self.module)
+            if in_dim is not None:
+                arg = arg.unbind(in_dim)
+                if n is None:
+                    n = len(arg)
+                elif n != len(arg):
+                    raise ValueError(
+                        f"The length of the unbound args differs: {n} vs {len(arg)}."
+                    )
+                args[i] = arg
+            else:
+                to_rep.append(i)
+        args = [
+            tuple(arg.copy() for _ in range(n)) if i in to_rep else arg
+            for i, arg in enumerate(args)
+        ]
+        out = []
+        n_out = None
+        for i, _args in enumerate(zip(*args)):
+            if self.functional:
+                with _args[-1].to_module(self.module):
+                    out.append(self.module(*_args[:-1]))
+            else:
+                # Ignore the last param, which must be a TD containing params
+                out.append(self.module[i](*_args))
+            if n_out is None:
+                n_out = len(out[-1]) if isinstance(out[-1], tuple) else 1
+        if n_out > 1:
+            return tree_map(lambda *x: torch.stack(out, dim=0), *out)
+        elif n_out == 1:
+            # We explicitly assume that out can be stacked
+            result = torch.stack(out, dim=0)
+            return result
+        else:
+            raise ValueError("Could not determine the number of outputs.")
 
 
 def _reduce(tensor: torch.Tensor, reduction: str) -> Union[float, torch.Tensor]:
