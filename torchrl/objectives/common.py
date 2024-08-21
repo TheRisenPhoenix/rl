@@ -409,7 +409,15 @@ class LossModule(TensorDictModuleBase, metaclass=_LossMeta):
                     )
                     params = TensorDict.from_module(module, as_module=True)
                 setattr(self, module_name, module)
-                setattr(self, module_name + "_params", None)
+                # TODO
+                # register parameters and buffers
+                # for key, parameter in list(params.items(True, True)):
+                #     if parameter not in prev_set_params:
+                #         pass
+                #     elif compare_against is not None and parameter in compare_against:
+                #         params.set(key, parameter.data)
+
+                setattr(self, module_name + "_params", params)
                 if target_network is not None and not expand_dim:
                     target_network.requires_grad_(False)
                     # convert all params to buffers
@@ -440,9 +448,10 @@ class LossModule(TensorDictModuleBase, metaclass=_LossMeta):
                         # The only way to get this working is to deepcopy the module
                         setattr(self, name_target_network, deepcopy(module))
                     target_params.to_module(getattr(self, name_target_network))
+                    setattr(self, name_target_network + "_params", target_params)
                 else:
                     self.__dict__[name_target_network] = module
-                setattr(self, name_target_network + "_params", None)
+                    setattr(self, name_target_network + "_params", None)
                 self._has_update_associated[module_name] = not create_target_params
                 return
 
@@ -502,8 +511,7 @@ class LossModule(TensorDictModuleBase, metaclass=_LossMeta):
                 pass
             elif compare_against is not None and parameter in compare_against:
                 params.set(key, parameter.data)
-
-        setattr(self, param_name, params)
+        setattr(self, param_name, params) # LH: This must be reached
 
         # Set the module in the __dict__ directly to avoid listing its params
         # A deepcopy with meta device could be used but that assumes that the model is copyable!
