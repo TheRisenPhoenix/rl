@@ -530,7 +530,7 @@ def _maybe_vmap_maybe_func(
             # we still need to iterate over the module
             return _LoopVmapModule(module, *args, func=func, **kwargs, functional=False)
 
-
+# TODO
 class _LoopVmapModule(nn.Module):
     def __init__(
         self,

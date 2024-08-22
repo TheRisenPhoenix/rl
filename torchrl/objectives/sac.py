@@ -1378,14 +1378,15 @@ class DiscreteSACLoss(LossModule):
             next_log_prob = torch.log(torch.where(next_prob == 0, 1e-8, next_prob))
 
             # get q-values for all actions
-            # next_tensordict_expand = self._vmap_qnetworkN0(
-            #     next_tensordict, self.target_qvalue_network_params
-            # )
-            next_tensordict_expand = self._maybe_func_call(
-                next_tensordict,
-                module=self.qvalue_network,
-                module_params=self.target_qvalue_network_params
+            next_tensordict_expand = self._vmap_qnetworkN0(
+                next_tensordict, self.target_qvalue_network_params
             )
+            # next_tensordict_expand = self._maybe_func_call(
+            #     next_tensordict,
+            #     # module=self._vmap_qnetworkN0,
+            #     module=self.qvalue_network,
+            #     module_params=self.target_qvalue_network_params
+            # )
 
             next_action_value = next_tensordict_expand.get(
                 self.tensor_keys.action_value
@@ -1406,13 +1407,13 @@ class DiscreteSACLoss(LossModule):
         self, tensordict: TensorDictBase
     ) -> Tuple[Tensor, Dict[str, Tensor]]:
         target_value = self._compute_target(tensordict)
-        # tensordict_expand = self._vmap_qnetworkN0(
-        #     tensordict.select(*self.qvalue_network.in_keys, strict=False),
-        #     self.qvalue_network_params,
-        # )
-        tensordict_expand = self._maybe_func_call(tensordict.select(*self.qvalue_network.in_keys, strict=False),
-                                                  module=self.qvalue_network,
-                                                  module_params=self.qvalue_network_params)
+        tensordict_expand = self._vmap_qnetworkN0(
+            tensordict.select(*self.qvalue_network.in_keys, strict=False),
+            self.qvalue_network_params,
+        )
+        # tensordict_expand = self._maybe_func_call(tensordict.select(*self.qvalue_network.in_keys, strict=False),
+        #                                           module=self.qvalue_network,
+        #                                           module_params=self.qvalue_network_params)
 
         action_value = tensordict_expand.get(self.tensor_keys.action_value)
         action = tensordict.get(self.tensor_keys.action)
@@ -1460,14 +1461,14 @@ class DiscreteSACLoss(LossModule):
 
         td_q = tensordict.select(*self.qvalue_network.in_keys, strict=False)
 
-        # td_q = self._vmap_qnetworkN0(
-        #     td_q, self._cached_detached_qvalue_params  # should we clone?
-        # )
-        td_q = self._maybe_func_call(
-            td_q,
-            module=self.qvalue_network,
-            module_params=self._cached_detached_qvalue_params
+        td_q = self._vmap_qnetworkN0(
+            td_q, self._cached_detached_qvalue_params  # should we clone?
         )
+        # td_q = self._maybe_func_call(
+        #     td_q,
+        #     module=self.qvalue_network,
+        #     module_params=self._cached_detached_qvalue_params
+        # )
 
         min_q = td_q.get(self.tensor_keys.action_value).min(0)[0]
 
