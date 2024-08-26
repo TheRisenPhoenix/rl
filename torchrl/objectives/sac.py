@@ -1462,7 +1462,7 @@ class DiscreteSACLoss(LossModule):
         td_q = tensordict.select(*self.qvalue_network.in_keys, strict=False)
 
         td_q = self._vmap_qnetworkN0(
-            td_q, self._cached_detached_qvalue_params  # should we clone?
+            td_q, self._cached_detached_qvalue_params.clone()  # should we clone?
         )
         # td_q = self._maybe_func_call(
         #     td_q,
